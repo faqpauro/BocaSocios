@@ -91,6 +91,38 @@ playwright_instance = None
 async_loop = None
 
 
+async def set_session_window(context, window_state):
+    page = context.pages[0] if context.pages else await context.new_page()
+    client = await context.new_cdp_session(page)
+    try:
+        window = await client.send("Browser.getWindowForTarget")
+        await client.send("Browser.setWindowBounds", {
+            "windowId": window["windowId"],
+            "bounds": {"windowState": window_state},
+        })
+    finally:
+        await client.detach()
+    return page
+
+
+async def open_session_async(session_id, open_target=False):
+    with app_lock:
+        if app_state["status"] != "RUNNING":
+            raise ValueError("El monitor no está activo.")
+        session = app_state["sessions"].get(session_id)
+        if session is None:
+            raise ValueError("La sesión seleccionada no existe.")
+        index = session["session"] - 1
+        target_url = session.get("targetUrl") if open_target else None
+    if index >= len(active_contexts):
+        raise ValueError("La sesión seleccionada no está disponible.")
+    page = await set_session_window(active_contexts[index], "normal")
+    await page.bring_to_front()
+    if target_url and page.url != target_url:
+        await page.goto(target_url, wait_until="domcontentloaded")
+    return {"status": "opened", "session_id": session_id}
+
+
 def update_session(session_id, data):
     with app_lock:
         if session_id in app_state["sessions"]:
@@ -312,7 +344,7 @@ async def start_monitoring_async(num_sessions, target_url):
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n[MONITOR] Iniciando {num_sessions} sesiones en segundo plano (Headless=True)...")
+    print(f"\n[MONITOR] Iniciando {num_sessions} sesiones en ventanas minimizadas...")
 
     try:
         playwright_instance = await async_playwright().start()
@@ -326,11 +358,12 @@ async def start_monitoring_async(num_sessions, target_url):
 
             context = await playwright_instance.chromium.launch_persistent_context(
                 str(profile),
-                headless=True,
+                headless=False,
                 viewport={"width": 1440, "height": 900},
-                args=["--disable-blink-features=AutomationControlled"],
+                args=["--disable-blink-features=AutomationControlled", "--start-minimized"],
             )
             active_contexts.append(context)
+            await set_session_window(context, "minimized")
 
             task = async_loop.create_task(monitor_session(i, context, target_url))
             active_tasks.append(task)
@@ -606,31 +639,36 @@ header {
     justify-content: center;
     align-items: center;
     width: 100%;
+    overflow-y: auto;
+    padding: 24px 8px;
 }
 
 .config-card-compact {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: 12px;
-    padding: 14px 20px;
+    padding: 32px 36px;
     box-shadow: 0 6px 25px rgba(0, 0, 0, 0.45);
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    max-width: 960px;
+    gap: 24px;
+    max-width: 1200px;
     width: 100%;
+    flex-shrink: 0;
+    margin: auto;
 }
 
 .config-top-banner {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding-bottom: 8px;
+    padding-bottom: 20px;
+    gap: 24px;
     border-bottom: 1px solid var(--border-color);
 }
 
 .config-top-title h2 {
-    font-size: 17px;
+    font-size: 28px;
     font-weight: 800;
     letter-spacing: -0.3px;
     color: #ffffff;
@@ -638,17 +676,18 @@ header {
 
 .config-top-title p {
     color: var(--text-secondary);
-    font-size: 11px;
-    margin-top: 2px;
+    font-size: 15px;
+    line-height: 1.5;
+    margin-top: 8px;
 }
 
 .config-badge {
     background: rgba(255, 184, 0, 0.12);
     border: 1px solid rgba(255, 184, 0, 0.3);
     color: var(--boca-gold);
-    font-size: 10.5px;
+    font-size: 12px;
     font-weight: 700;
-    padding: 3px 9px;
+    padding: 8px 12px;
     border-radius: 16px;
     display: inline-flex;
     align-items: center;
@@ -662,8 +701,8 @@ header {
     background: #08101e;
     border: 1px solid var(--border-color);
     border-radius: 8px;
-    padding: 8px 14px;
-    gap: 8px;
+    padding: 22px 24px;
+    gap: 20px;
 }
 
 .selector-top-row {
@@ -676,12 +715,12 @@ header {
 .selector-left {
     display: flex;
     flex-direction: column;
-    gap: 1px;
-    min-width: 160px;
+    gap: 6px;
+    min-width: 220px;
 }
 
 .selector-label {
-    font-size: 10.5px;
+    font-size: 13px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -696,13 +735,13 @@ header {
 }
 
 .btn-stepper-compact {
-    width: 30px;
-    height: 30px;
+    width: 44px;
+    height: 44px;
     border-radius: 6px;
     background: #111d38;
     border: 1px solid var(--border-color);
     color: var(--boca-gold);
-    font-size: 16px;
+    font-size: 24px;
     font-weight: 800;
     cursor: pointer;
     display: flex;
@@ -718,7 +757,7 @@ header {
 }
 
 .sessions-number-badge {
-    font-size: 26px;
+    font-size: 40px;
     font-weight: 800;
     font-family: 'JetBrains Mono', monospace;
     color: #ffffff;
@@ -730,7 +769,7 @@ header {
 
 .range-slider-compact {
     flex: 1;
-    height: 6px;
+    height: 10px;
     border-radius: 3px;
     background: #14223d;
     outline: none;
@@ -740,8 +779,8 @@ header {
 
 .range-slider-compact::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 18px;
-    height: 18px;
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
     background: var(--boca-gold);
     box-shadow: 0 0 8px var(--boca-gold);
@@ -752,11 +791,12 @@ header {
 .presets-bar {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 .presets-label {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-muted);
     font-weight: 600;
     text-transform: uppercase;
@@ -768,9 +808,9 @@ header {
     background: #0e1a32;
     border: 1px solid var(--border-color);
     color: var(--text-secondary);
-    font-size: 10.5px;
+    font-size: 14px;
     font-weight: 600;
-    padding: 3px 8px;
+    padding: 10px 14px;
     border-radius: 5px;
     cursor: pointer;
     transition: all 0.15s;
@@ -793,14 +833,15 @@ header {
 .analytics-grid-compact {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 10px;
+    gap: 20px;
 }
 
 .metric-panel-compact {
     background: #08101e;
     border: 1px solid var(--border-color);
     border-radius: 8px;
-    padding: 10px 14px;
+    padding: 22px 24px;
+    gap: 16px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -814,7 +855,7 @@ header {
 }
 
 .metric-title-compact {
-    font-size: 10.5px;
+    font-size: 13px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -825,9 +866,9 @@ header {
 }
 
 .chance-badge-compact {
-    font-size: 9.5px;
+    font-size: 12px;
     font-weight: 800;
-    padding: 2px 6px;
+    padding: 5px 8px;
     border-radius: 4px;
     font-family: 'JetBrains Mono', monospace;
 }
@@ -837,7 +878,7 @@ header {
 .chance-badge-compact.low { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; }
 
 .big-percentage-compact {
-    font-size: 26px;
+    font-size: 44px;
     font-weight: 800;
     font-family: 'JetBrains Mono', monospace;
     color: #ffffff;
@@ -861,7 +902,7 @@ header {
 }
 
 .metric-desc-compact {
-    font-size: 10.5px;
+    font-size: 14px;
     color: var(--text-muted);
     line-height: 1.35;
 }
@@ -870,9 +911,9 @@ header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 4px 0;
+    padding: 10px 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-    font-size: 11px;
+    font-size: 14px;
 }
 
 .hw-row-compact:last-child {
@@ -890,9 +931,10 @@ header {
     gap: 6px;
     margin-top: 6px;
     background: #0c172d;
-    padding: 4px 8px;
+    padding: 10px 12px;
     border-radius: 5px;
-    font-size: 10px;
+    font-size: 12px;
+    flex-wrap: wrap;
     color: var(--text-secondary);
     justify-content: space-around;
 }
@@ -902,7 +944,7 @@ header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding-top: 6px;
+    padding-top: 20px;
     border-top: 1px solid var(--border-color);
     gap: 12px;
 }
@@ -911,10 +953,10 @@ header {
     background: linear-gradient(135deg, #0d4bb5 0%, #002b66 100%);
     border: 1.5px solid var(--boca-gold);
     color: #ffffff;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 800;
     letter-spacing: 0.3px;
-    padding: 10px 24px;
+    padding: 16px 28px;
     border-radius: 8px;
     cursor: pointer;
     box-shadow: 0 0 16px rgba(255, 184, 0, 0.3);
@@ -932,11 +974,35 @@ header {
 }
 
 .headless-notice-compact {
-    font-size: 11px;
+    font-size: 14px;
     color: var(--text-secondary);
     display: flex;
     align-items: center;
     gap: 6px;
+}
+
+@media (max-width: 900px) {
+    #view-config { padding: 16px 0; }
+    .config-card-compact { padding: 24px; gap: 20px; }
+    .config-top-banner, .selector-top-row, .config-action-compact {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 16px;
+    }
+    .config-badge { align-self: flex-start; }
+    .config-top-title h2 { font-size: 24px; }
+    .analytics-grid-compact { grid-template-columns: 1fr; }
+    .btn-launch-compact { justify-content: center; white-space: normal; }
+    .selector-left { min-width: 0; }
+}
+
+@media (max-width: 480px) {
+    .config-card-compact { padding: 18px 14px; }
+    .selector-compact, .metric-panel-compact { padding: 18px 14px; }
+    .selector-slider-box { gap: 8px; }
+    .range-slider-compact { min-width: 0; }
+    .metric-header-compact { flex-wrap: wrap; gap: 8px; }
+    .hw-row-compact { flex-wrap: wrap; gap: 6px; }
 }
 
 /* ============================================================ */
@@ -1352,10 +1418,10 @@ header {
             <div class="config-top-banner">
                 <div class="config-top-title">
                     <h2>Configuración de Sesiones de Espera</h2>
-                    <p>Monitoreá los turnos sin abrir navegadores en tu pantalla. Ingresá a Boca con 1 clic en la que tenga menos tiempo.</p>
+                    <p>Monitoreá los turnos con las ventanas minimizadas. Abrí la sesión elegida sin perder sus cookies ni recargar la página.</p>
                 </div>
                 <div class="config-badge">
-                    <span>🛡️</span> 100% HEADLESS (SILENCIOSO)
+                    <span>🛡️</span> VENTANAS MINIMIZADAS
                 </div>
             </div>
 
@@ -1364,7 +1430,7 @@ header {
                 <div class="selector-top-row">
                     <div class="selector-left">
                         <span class="selector-label">Navegadores simultáneos</span>
-                        <span style="font-size:10.5px; color:var(--text-secondary);">Seleccioná la cantidad a abrir</span>
+                        <span style="font-size:14px; color:var(--text-secondary);">Seleccioná la cantidad a abrir</span>
                     </div>
                     <div class="selector-slider-box">
                         <button class="btn-stepper-compact" onclick="adjustSessions(-1)">−</button>
@@ -1537,6 +1603,7 @@ const expandedSessions = new Set();
 let soundEnabled = true;
 const notifiedTurns = new Set();
 let bannerTargetUrl = null;
+let bannerSessionId = null;
 let audioCtx = null;
 
 function getAudioContext() {
@@ -1700,21 +1767,23 @@ async function stopSessions() {
     }
 }
 
-async function openInBrowser(url) {
-    if (!url) return;
+async function openInBrowser(sessionId, openTarget = false) {
+    if (!sessionId) return;
     try {
-        await fetch("/open-browser", {
+        const response = await fetch("/open-browser", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url: url })
+            body: JSON.stringify({ session_id: sessionId, open_target: openTarget })
         });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "No se pudo abrir la sesión.");
     } catch (e) {
-        window.open(url, "_blank");
+        alert(e.message || "No se pudo abrir la sesión.");
     }
 }
 
 function openTargetInBrowser() {
-    if (bannerTargetUrl) openInBrowser(bannerTargetUrl);
+    if (bannerSessionId) openInBrowser(bannerSessionId, true);
 }
 
 // ============================================================
@@ -1838,11 +1907,13 @@ function renderMonitor(data) {
     const turnBanner = document.getElementById("turn-banner");
     if (turnBannerSession) {
         bannerTargetUrl = turnBannerSession.targetUrl || turnBannerSession.url;
+        bannerSessionId = `session_${String(turnBannerSession.session).padStart(2, '0')}`;
         turnBanner.classList.add("active");
         document.getElementById("turn-banner-title").textContent = `🟢 ¡TURNO LISTO EN SESIÓN ${String(turnBannerSession.session).padStart(2, "0")}!`;
     } else {
         turnBanner.classList.remove("active");
         bannerTargetUrl = null;
+        bannerSessionId = null;
     }
 
     const filtered = sessions.filter(([id, s]) => {
@@ -1868,13 +1939,13 @@ function renderMonitor(data) {
         let actionHtml = "";
         if (s.targetUrl) {
             actionHtml = `
-                <button class="btn-open-session" onclick="event.stopPropagation(); openInBrowser('${esc(s.targetUrl)}')">
+                <button class="btn-open-session" onclick="event.stopPropagation(); openInBrowser('${id}', true)">
                     INGRESAR A BOCA ➔
                 </button>
             `;
         } else {
             actionHtml = `
-                <button class="btn-open-tab" onclick="event.stopPropagation(); openInBrowser('${esc(s.url)}')">
+                <button class="btn-open-tab" onclick="event.stopPropagation(); openInBrowser('${id}')">
                     🌐 Abrir
                 </button>
             `;
@@ -1946,7 +2017,7 @@ function renderMonitor(data) {
                                     <div class="drawer-card-label" style="color:#10b981;">Target URL con Token de Compra</div>
                                     <div class="drawer-card-val" style="text-overflow:ellipsis; overflow:hidden;">${esc(s.targetUrl)}</div>
                                 </div>
-                                <button class="btn-mini-action-compact" onclick="openInBrowser('${esc(s.targetUrl)}')">Abrir</button>
+                                <button class="btn-mini-action-compact" onclick="openInBrowser('${id}', true)">Abrir</button>
                             </div>
                         ` : ''}
 
@@ -1955,7 +2026,7 @@ function renderMonitor(data) {
                                 <div class="drawer-card-label">URL Actual</div>
                                 <div class="drawer-card-val" style="text-overflow:ellipsis; overflow:hidden;">${esc(s.url)}</div>
                             </div>
-                            <button class="btn-mini-action-compact" onclick="openInBrowser('${esc(s.url)}')">Abrir</button>
+                            <button class="btn-mini-action-compact" onclick="openInBrowser('${id}')">Abrir</button>
                         </div>
 
                         ${s.error ? `
@@ -2080,14 +2151,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/open-browser":
-            target_url = req_data.get("url", "")
-            if target_url:
-                webbrowser.open(target_url)
-
-            self.send_response(200)
+            try:
+                if not async_loop:
+                    raise ValueError("El monitor no está disponible.")
+                future = asyncio.run_coroutine_threadsafe(
+                    open_session_async(req_data.get("session_id", ""),
+                                       req_data.get("open_target") is True),
+                    async_loop,
+                )
+                result = future.result(timeout=35)
+                status = 200
+            except Exception as exc:
+                result = {"error": str(exc) or "No se pudo abrir la sesión."}
+                status = 400 if isinstance(exc, ValueError) else 500
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"opened"}')
+            self.wfile.write(json.dumps(result, ensure_ascii=False).encode("utf-8"))
             return
 
         self.send_response(404)
