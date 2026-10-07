@@ -1,0 +1,26 @@
+# Perfiles persistentes: contienen cookies y datos de sesión.
+/boca_profile/
+/profiles/
+
+# Archivos generados durante el monitoreo.
+/screenshots/
+*.log
+
+# Python y entornos locales.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Configuración privada y credenciales locales.
+.env
+.env.*
+!.env.example
+/config.py
+
+# Archivos del sistema y editores.
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
